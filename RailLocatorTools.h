@@ -14,18 +14,8 @@
 #include <IdSSLOpenSSL.hpp>
 #include <DBXJSON.hpp>
 #include <process.h>
+#include <vector>
 //---------------------------------------------------------------------------
-
-class TLocalHTTP : public TIdHTTP
-{
-	public:
-		void __fastcall DeleteRequest(String request, TStringStream *params, TStringStream *response)
-        {
-			DoRequest("DELETE", request, params, response, NULL, -1);
-		}
-};
-
-
 enum class RLType
 {
 	NONE,
@@ -40,19 +30,31 @@ enum class RLType
 	REGULATION_TRACKING_ROUTE
 };
 
+class RLData
+{
+	public:
+		int track_id;     //номер трека
+		int status_code;  //возвращаемый код ответа на запрос относительно одного контейнера
+		String msg;       //описание ошибки
+		RLData()
+		{
+			track_id = 0;
+			status_code = 0;
+		}
+		virtual ~RLData(){};
+};
 
 //Ѕаланс аккаунта
-class RLBalanceData     //[get]
+class RLBalanceData : public RLData     //[get]
 {
 	public:
 		float balance;      //текущий баланс
 };
 
 //—писани€ по контейнерам
-class RLDecreaseData    //[get]
+class RLDecreaseData : public RLData   //[get]
 {
 	public:
-		int track_id;       //номер трека
 		String vagen_num;   //номер контейнера
 		String nss;         //Ќ——
 		float balance;      //текущий баланс
@@ -61,10 +63,9 @@ class RLDecreaseData    //[get]
 };
 
 //—писок активных контейнеров наход€щихс€ на слежении
-class RLListContainerTrackingData  //[get]
+class RLListContainerTrackingData : public RLData  //[get]
 {
 	public:
-		int track_id;           //номер трека
 		String vagen_num;       //номер контейнера
 		int track_descr;    	//тип запроса (код страны)
 		TDate track_create;     //дата первой постановки на слежение
@@ -73,25 +74,22 @@ class RLListContainerTrackingData  //[get]
 };
 
 //—н€тие со слежени€
-class RLContainerDeletedData       //[delete] params { "track_ids": "3*****4;3*****5" }
-{
+class RLContainerDeletedData : public RLData      //[delete] params { "track_ids": "3*****4;3*****5" }   version 1.0
+{                                  				  //[delete] params {"data": [{"status_code": 204,"track_id": 123456},{"status_code": 403,"track_id": 123457}]} version 2.0
 	public:
-		int track_id;
 		String vagen_num;
 };
 
 //постановка на суточное слежение
-class RLTrackingDailyData         //[post] {"track_type":"299","vagens": "TKRU######8,01;TKRU######7,01"}
+class RLTrackingDailyData : public RLData        //[post] {"track_type":"299","vagens": "TKRU######8,01;TKRU######7,01"}
 {
 	public:
-		int track_id;
 		String vagen_num;
 };
 
-class RLExtendedTrackingData
+class RLExtendedTrackingData : public RLData
 {
 	public:
-		int track_id;         //номер трека
 		String cont_num;     //номер контейнера
 		TDate datearrive; // ƒата факт. прибыти€ на ст.
 		TDate approx_date_of_arrival; // ќриентировочное прибытие
@@ -102,8 +100,12 @@ class RLExtendedTrackingData
 		int passed_distance;
 		int distance;
 		TDate date_rec; // ƒата постановки на слежение
-		String train_num;
-        //float cargo_weight;
+		String train_num; // номер поезда
+		//float cargo_weight;
+		String dest_point_name; // станци€ назначени€
+		String from_station;    // станци€ отправлени€
+        String name_station;    // текуща€ станци€ операции
+		String platform_number;		// номер платформы
 };
 
 //ќтвет на запрос
@@ -122,38 +124,95 @@ class RLResponse
 			result = "";
 			dataCount = 0;
 		}
-		~RLResponse()
+		virtual ~RLResponse()
 		{
-			if (dataCount > 0 && Data != NULL)
-			{
-				delete[] Data;
-			}
-			if (Data != NULL && dataCount == 0)
-			{
-				delete Data;
-			}
+			ClearData();
 		}
+		void ClearData();
+};
+
+struct RLContainerItem
+{
+	String track_type;
+	String is_cross_country_tracking;
+	String railway_code;
+	String platform_number;
+	String container_name;
+	String vagens;
+	RLContainerItem()
+	{
+		track_type = "";
+		is_cross_country_tracking = "";
+		railway_code = "";
+		platform_number = "";
+		container_name = "";
+		vagens = "";
+	}
+	RLContainerItem(String trackType, String isCrossCountryTracking, String railwayCode, String platformNumber, String containerName) :
+	track_type(trackType), is_cross_country_tracking(isCrossCountryTracking), railway_code(railwayCode), platform_number(platformNumber), container_name(containerName)
+	{
+		vagens = containerName + "," + railwayCode;
+	}
+};
+
+class RLContainerItemCollection
+{
+	private:
+		std::vector<RLContainerItem*> items;
+		std::vector<RLContainerItem*>::iterator it;
+		RLContainerItem* GetItem(unsigned index)
+		{
+			if (items.size() < index + 1)
+				return NULL;
+			return items.at(index);
+		}
+	public:
+		int Count()
+		{
+			return items.size();
+		}
+		__property RLContainerItem* Items[unsigned Index] = {read=GetItem};
+		RLContainerItem* operator[](unsigned Index)
+		{
+			return this->Items[Index];
+		}
+		RLContainerItemCollection(){};
+		virtual ~RLContainerItemCollection()
+		{
+			Clear();
+		}
+		void AddItem(RLContainerItem *item);
+		void AddItem(String trackType, String isCrossCountryTracking, String railwayCode, String platformNumber, String containerName);
+		void Clear();
+		void AddItems(std::vector<RLContainerItem*> &items);
 };
 
 //“ело запроса
 class RLRequest
 {
 	public:
+		RLContainerItemCollection *containerItemCollection;
 		String track_ids;
-		String track_type;
-		String vagens;
 		int last;
 		RLType reqType;
+		int version;
 		RLRequest(RLType rt)
 		{
+            containerItemCollection = NULL;
 			reqType = rt;
 			last = 1;
 			track_ids = "";
-			track_type = "";
-			vagens = "";
+			version = 1;
+		}
+		virtual ~RLRequest()
+		{
+			if (containerItemCollection != NULL)
+			{
+				delete containerItemCollection;
+                containerItemCollection = NULL;
+			}
 		}
 		void SetHeaders(TStringList *params);
-
 };
 
 class RailLocatorTools
@@ -163,39 +222,49 @@ class RailLocatorTools
 		String GetResponse(TStringList *params, TIdHTTP *http, String &request);
 		String GetTracksToString(TStringList *trackIds);
 		String GetVagensToString(TStringList *containerNames, TStringList *railwayCodes);
+        bool CheckResponseCode(int code);
 	protected:
 		String userName;
 		String userPassword;
-		
+		int version;
 	public:
 		RLType rType;
 		RLResponse *response;
-		RailLocatorTools(String userName, String userPassword)
+		RailLocatorTools(String userName, String userPassword, int version)
 		{
 			this->userName	   = userName;
 			this->userPassword = userPassword;
 			this->rType 	   = RLType::NONE;
+			this->version      = version;
+			this->request      = NULL;
+			this->response     = NULL;
 		}
-		RailLocatorTools(String userName, String userPassword, RLType rType)
+		RailLocatorTools(String userName, String userPassword, RLType rType, int version = 1)
 		{
 			this->userName	   = userName;
 			this->userPassword = userPassword;
 			this->rType 	   = rType;
+			this->version      = version;
+            this->request      = NULL;
+			this->response     = NULL;
 		}
-		~RailLocatorTools()
-		{   /*
+		virtual ~RailLocatorTools()
+		{
 			if (request != NULL)
 			{
 				delete request;
+				request = NULL;
 			}
 			if (response != NULL)
 			{
 				delete response;
-			}    */
+                response = NULL;
+			}
 		}
-		bool GetResponseInfo(String track_ids = "", String containerName = "", String track_type = "", String railwayCode = "");
+		bool GetResponseInfo(String track_ids = "", RLContainerItemCollection *containerItemCollection = NULL);
 		bool GetMultipleExtendedData(TStringList *trackIds);
 		bool DeleteMultipleData(TStringList *trackIds);
+        bool SetMultipleTrackingData(RLContainerItemCollection *containerItemCollection);
 		//bool SetMultipleDataTrackingDaily(String track_type, TStringList *containerNames, TStringList *railwayCodes);
 };
 
